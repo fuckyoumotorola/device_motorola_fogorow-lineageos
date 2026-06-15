@@ -33,6 +33,80 @@ jobs:
       CCACHE_EXEC: /usr/bin/ccache
 
     steps:
+      - name: Prepare build environment
+        shell: bash
+        run: |
+          set -e
+
+          if command -v xbps-install >/dev/null 2>&1; then
+            xbps-install -Syu || true
+
+            install_if_missing() {
+              pkg="$1"
+
+              if xbps-query -p pkgver "$pkg" >/dev/null 2>&1; then
+                echo "$pkg already installed"
+                return 0
+              fi
+
+              echo "Installing $pkg..."
+              xbps-install -Sy "$pkg" || echo "Skipping unavailable package: $pkg"
+            }
+
+            PACKAGES="
+              bash
+              bc
+              bison
+              ccache
+              curl
+              flex
+              gcc
+              gcc-multilib
+              git
+              git-lfs
+              gnupg
+              gperf
+              ImageMagick
+              lz4
+              lzop
+              make
+              ncurses-devel
+              ncurses-libs-32bit
+              openssl-devel
+              perl
+              pngcrush
+              python3
+              readline-devel
+              rsync
+              schedtool
+              squashfs-tools
+              unzip
+              which
+              libxml2
+              libxml2-devel
+              libxslt
+              libxslt-devel
+              zip
+              zlib-devel
+              zlib-32bit
+            "
+
+            for pkg in $PACKAGES; do
+              install_if_missing "$pkg"
+            done
+          fi
+
+          git lfs install --skip-repo || true
+
+          if ! command -v repo >/dev/null 2>&1; then
+            mkdir -p "$HOME/bin"
+            curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+            chmod a+x "$HOME/bin/repo"
+            echo "$HOME/bin" >> "$GITHUB_PATH"
+          fi
+
+          mkdir -p "$WORKDIR" "$CCACHE_DIR"
+
       - name: Configure ccache
         shell: bash
         run: |
