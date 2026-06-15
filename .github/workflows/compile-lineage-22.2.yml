@@ -1,0 +1,146 @@
+name: Build LineageOS for fogorow
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_branch:
+        description: "LineageOS manifest branch"
+        required: true
+        default: "lineage-22.2"
+      clean_sync:
+        description: "Delete old source before syncing"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build fogorow
+    runs-on: self-hosted
+    timeout-minutes: 1440
+
+    env:
+      DEVICE: fogorow
+      DEVICE_PATH: device/motorola/fogorow
+      DEVICE_REPO: https://github.com/fuckyoumotorola/device_motorola_fogorow-lineageos
+      VENDOR_REPO: https://github.com/fuckyoumotorola/vendor_motorola_fogorow
+      WORKDIR: /mnt/lineage/fogorow
+      CCACHE_DIR: /mnt/lineage/ccache
+      USE_CCACHE: 1
+      CCACHE_EXEC: /usr/bin/ccache
+
+    steps:
+      - name: Prepare packages
+        shell: bash
+        run: |
+          set -e
+
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y \
+              bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+              git git-lfs gnupg gperf imagemagick lib32ncurses-dev lib32readline-dev \
+              lib32z1-dev libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev \
+              libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool \
+              squashfs-tools xsltproc zip zlib1g-dev python3 python-is-python3 repo
+          fi
+
+          git lfs install --skip-repo || true
+          mkdir -p "$WORKDIR" "$CCACHE_DIR"
+
+      - name: Configure ccache
+        shell: bash
+        run: |
+          set -e
+          ccache -M 100G || true
+          ccache -o compression=true || true
+
+      - name: Clean source if requested
+        if: ${{ inputs.clean_sync == 'true' }}
+        shell: bash
+        run: |
+          set -e
+          rm -rf "$WORKDIR"
+
+      - name: Init LineageOS source
+        shell: bash
+        run: |
+          set -e
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+
+          repo init \
+            -u https://github.com/LineageOS/android.git \
+            -b "${{ inputs.manifest_branch }}" \
+            --git-lfs
+
+      - name: Sync source
+        shell: bash
+        run: |
+          set -e
+          cd "$WORKDIR"
+
+          repo sync \
+            -c \
+            --force-sync \
+            --no-clone-bundle \
+            --no-tags \
+            --optimized-fetch \
+            -j"$(nproc)"
+
+      - name: Clone device and vendor trees
+        shell: bash
+        run: |
+          set -e
+          cd "$WORKDIR"
+
+          rm -rf "$DEVICE_PATH"
+          git clone --depth=1 "$DEVICE_REPO" "$DEVICE_PATH"
+
+          rm -rf vendor/motorola/fogorow
+          git clone --depth=1 "$VENDOR_REPO" vendor/motorola/fogorow || true
+
+      - name: Show tree info
+        shell: bash
+        run: |
+          set -e
+          cd "$WORKDIR"
+
+          echo "Device tree:"
+          ls -la "$DEVICE_PATH"
+
+          echo "AndroidProducts.mk:"
+          cat "$DEVICE_PATH/AndroidProducts.mk" || true
+
+          echo "Lineage products:"
+          find "$DEVICE_PATH" -maxdepth 1 -name "*fogorow*.mk" -print
+
+      - name: Build ROM
+        shell: bash
+        run: |
+          set -e
+          cd "$WORKDIR"
+
+          source build/envsetup.sh
+
+          breakfast lineage_fogorow userdebug || lunch lineage_fogorow-userdebug
+
+          mka bacon -j"$(nproc)"
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lineage-fogorow-output
+          path: |
+            /mnt/lineage/fogorow/out/target/product/fogorow/*.zip
+            /mnt/lineage/fogorow/out/target/product/fogorow/*.img
+            /mnt/lineage/fogorow/out/target/product/fogorow/*.txt
+            /mnt/lineage/fogorow/out/target/product/fogorow/obj/PACKAGING/target_files_intermediates/*.zip
+          if-no-files-found: warn
