@@ -3,10 +3,6 @@ name: Build LineageOS for fogorow
 on:
   workflow_dispatch:
     inputs:
-      manifest_branch:
-        description: "LineageOS manifest branch"
-        required: true
-        default: "lineage-22.2"
       clean_sync:
         description: "Delete old source before syncing"
         required: true
@@ -30,34 +26,78 @@ jobs:
       DEVICE_PATH: device/motorola/fogorow
       DEVICE_REPO: https://github.com/fuckyoumotorola/device_motorola_fogorow-lineageos
       VENDOR_REPO: https://github.com/fuckyoumotorola/vendor_motorola_fogorow
+      MANIFEST_BRANCH: lineage-22.2
       WORKDIR: /mnt/lineage/fogorow
       CCACHE_DIR: /mnt/lineage/ccache
       USE_CCACHE: 1
       CCACHE_EXEC: /usr/bin/ccache
 
     steps:
-      - name: Prepare packages
+      - name: Prepare build environment
         shell: bash
         run: |
           set -e
 
-          if command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y \
-              bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
-              git git-lfs gnupg gperf imagemagick lib32ncurses-dev lib32readline-dev \
-              lib32z1-dev libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev \
-              libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool \
-              squashfs-tools xsltproc zip zlib1g-dev python3 python-is-python3 repo
+          if command -v xbps-install >/dev/null 2>&1; then
+            xbps-install -Syu || true
+
+            xbps-install -Sy \
+              bash \
+              bc \
+              bison \
+              ccache \
+              curl \
+              flex \
+              gcc \
+              gcc-multilib \
+              git \
+              git-lfs \
+              gnupg \
+              gperf \
+              ImageMagick \
+              lz4 \
+              lzop \
+              make \
+              ncurses-devel \
+              ncurses-libs-32bit \
+              openssl-devel \
+              openssl-libs-32bit \
+              perl \
+              pngcrush \
+              python3 \
+              readline-devel \
+              readline-libs-32bit \
+              rsync \
+              schedtool \
+              squashfs-tools \
+              unzip \
+              which \
+              xml2 \
+              libxml2 \
+              libxml2-devel \
+              libxslt \
+              zip \
+              zlib-devel \
+              zlib-32bit
           fi
 
           git lfs install --skip-repo || true
+
+          if ! command -v repo >/dev/null 2>&1; then
+            mkdir -p "$HOME/bin"
+            curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+            chmod a+x "$HOME/bin/repo"
+            echo "$HOME/bin" >> "$GITHUB_PATH"
+          fi
+
           mkdir -p "$WORKDIR" "$CCACHE_DIR"
 
       - name: Configure ccache
         shell: bash
         run: |
           set -e
+          export PATH="$HOME/bin:$PATH"
+
           ccache -M 100G || true
           ccache -o compression=true || true
 
@@ -66,24 +106,29 @@ jobs:
         shell: bash
         run: |
           set -e
+
           rm -rf "$WORKDIR"
 
       - name: Init LineageOS source
         shell: bash
         run: |
           set -e
+          export PATH="$HOME/bin:$PATH"
+
           mkdir -p "$WORKDIR"
           cd "$WORKDIR"
 
           repo init \
             -u https://github.com/LineageOS/android.git \
-            -b "${{ inputs.manifest_branch }}" \
+            -b "$MANIFEST_BRANCH" \
             --git-lfs
 
       - name: Sync source
         shell: bash
         run: |
           set -e
+          export PATH="$HOME/bin:$PATH"
+
           cd "$WORKDIR"
 
           repo sync \
@@ -98,33 +143,38 @@ jobs:
         shell: bash
         run: |
           set -e
+
           cd "$WORKDIR"
 
           rm -rf "$DEVICE_PATH"
+          git clone --depth=1 -b lineage-22.2 "$DEVICE_REPO" "$DEVICE_PATH" || \
           git clone --depth=1 "$DEVICE_REPO" "$DEVICE_PATH"
 
           rm -rf vendor/motorola/fogorow
           git clone --depth=1 "$VENDOR_REPO" vendor/motorola/fogorow || true
 
-      - name: Show tree info
+      - name: Show device tree info
         shell: bash
         run: |
           set -e
+
           cd "$WORKDIR"
 
-          echo "Device tree:"
+          echo "Device tree files:"
           ls -la "$DEVICE_PATH"
 
           echo "AndroidProducts.mk:"
           cat "$DEVICE_PATH/AndroidProducts.mk" || true
 
-          echo "Lineage products:"
-          find "$DEVICE_PATH" -maxdepth 1 -name "*fogorow*.mk" -print
+          echo "Available fogorow mk files:"
+          find "$DEVICE_PATH" -maxdepth 1 -name "*.mk" -print
 
       - name: Build ROM
         shell: bash
         run: |
           set -e
+          export PATH="$HOME/bin:$PATH"
+
           cd "$WORKDIR"
 
           source build/envsetup.sh
