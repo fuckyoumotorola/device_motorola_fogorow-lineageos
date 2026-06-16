@@ -11,9 +11,19 @@ on:
         options:
           - "false"
           - "true"
+      sync_jobs:
+        description: "Repo sync jobs. Lower is safer against Google rate limits"
+        required: true
+        default: "4"
+        type: choice
+        options:
+          - "2"
+          - "4"
+          - "6"
+          - "8"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -121,7 +131,6 @@ jobs:
         shell: bash
         run: |
           set -e
-
           rm -rf "$WORKDIR"
 
       - name: Init LineageOS source
@@ -138,7 +147,7 @@ jobs:
             -b "$MANIFEST_BRANCH" \
             --git-lfs
 
-      - name: Sync source
+      - name: Sync source with retries
         shell: bash
         run: |
           set -e
@@ -146,13 +155,43 @@ jobs:
 
           cd "$WORKDIR"
 
-          repo sync \
-            -c \
-            --force-sync \
-            --no-clone-bundle \
-            --no-tags \
-            --optimized-fetch \
-            -j"$(nproc)"
+          SYNC_JOBS="${{ inputs.sync_jobs }}"
+
+          sync_once() {
+            EXTRA_ARGS=""
+
+            if repo sync -h 2>&1 | grep -q -- "--retry-fetches"; then
+              EXTRA_ARGS="$EXTRA_ARGS --retry-fetches=10"
+            fi
+
+            if repo sync -h 2>&1 | grep -q -- "--jobs-network"; then
+              EXTRA_ARGS="$EXTRA_ARGS --jobs-network=2"
+            fi
+
+            repo sync \
+              -c \
+              --force-sync \
+              --optimized-fetch \
+              --no-tags \
+              $EXTRA_ARGS \
+              -j"$SYNC_JOBS"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            echo "repo sync attempt $attempt/5"
+
+            if sync_once; then
+              echo "repo sync finished"
+              exit 0
+            fi
+
+            wait_seconds=$((attempt * 900))
+            echo "repo sync failed. Waiting ${wait_seconds}s before retry..."
+            sleep "$wait_seconds"
+          done
+
+          echo "repo sync failed after all retries"
+          exit 1
 
       - name: Clone device and vendor trees
         shell: bash
@@ -198,6 +237,35 @@ jobs:
 
           mka bacon -j"$(nproc)"
 
+      - name: Prepare release files
+        if: success()
+        shell: bash
+        run: |
+          set -e
+
+          PRODUCT_OUT="$WORKDIR/out/target/product/$DEVICE"
+          RELEASE_DIR="$WORKDIR/release-files"
+
+          rm -rf "$RELEASE_DIR"
+          mkdir -p "$RELEASE_DIR"
+
+          find "$PRODUCT_OUT" -maxdepth 1 \
+            \( -name "*.zip" -o -name "*.img" -o -name "*.txt" \) \
+            -type f \
+            -exec cp -v {} "$RELEASE_DIR/" \;
+
+          find "$PRODUCT_OUT/obj/PACKAGING/target_files_intermediates" \
+            -maxdepth 1 \
+            -name "*.zip" \
+            -type f \
+            -exec cp -v {} "$RELEASE_DIR/" \; || true
+
+          cd "$RELEASE_DIR"
+          sha256sum * > SHA256SUMS.txt
+
+          echo "Release files:"
+          ls -lh "$RELEASE_DIR"
+
       - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -209,3 +277,21 @@ jobs:
             /mnt/lineage/fogorow/out/target/product/fogorow/*.txt
             /mnt/lineage/fogorow/out/target/product/fogorow/obj/PACKAGING/target_files_intermediates/*.zip
           if-no-files-found: warn
+
+      - name: Upload ROM to GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: lineage-fogorow-${{ github.run_number }}
+          name: LineageOS fogorow build ${{ github.run_number }}
+          body: |
+            LineageOS build for Motorola fogorow.
+
+            Device: fogorow
+            Branch: lineage-22.2
+            Build target: bacon
+            Workflow run: ${{ github.run_number }}
+
+            SHA256 checksums are attached in SHA256SUMS.txt.
+          files: |
+            /mnt/lineage/fogorow/release-files/*
