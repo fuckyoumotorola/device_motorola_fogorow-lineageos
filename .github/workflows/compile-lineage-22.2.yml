@@ -110,7 +110,8 @@ jobs:
 
           if ! command -v repo >/dev/null 2>&1; then
             mkdir -p "$HOME/bin"
-            curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+            echo "Downloading repo tool..."
+            curl -L --progress-bar https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
             chmod a+x "$HOME/bin/repo"
             echo "$HOME/bin" >> "$GITHUB_PATH"
           fi
@@ -146,8 +147,7 @@ jobs:
             -u https://github.com/LineageOS/android.git \
             -b "$MANIFEST_BRANCH" \
             --git-lfs
-
-      - name: Sync source with retries
+      - name: Sync source with visible progress
         shell: bash
         run: |
           set -e
@@ -168,25 +168,61 @@ jobs:
               EXTRA_ARGS="$EXTRA_ARGS --jobs-network=2"
             fi
 
+            echo "::group::Repo sync command"
+            echo "Sync jobs: $SYNC_JOBS"
+            echo "Extra args: $EXTRA_ARGS"
+            echo "::endgroup::"
+
             repo sync \
               -c \
               --force-sync \
               --optimized-fetch \
               --no-tags \
+              --no-clone-bundle \
+              --force-broken \
+              --fail-fast \
+              --verbose \
               $EXTRA_ARGS \
               -j"$SYNC_JOBS"
           }
 
+          keep_alive() {
+            while true; do
+              echo "[$(date '+%H:%M:%S')] Still syncing LineageOS sources..."
+              echo "Current source size:"
+              du -sh "$WORKDIR" 2>/dev/null || true
+
+              echo "Git projects already present:"
+              find "$WORKDIR" -type d -name ".git" 2>/dev/null | wc -l || true
+
+              sleep 60
+            done
+          }
+
           for attempt in 1 2 3 4 5; do
-            echo "repo sync attempt $attempt/5"
+            echo "::group::repo sync attempt $attempt/5"
+            echo "Starting repo sync attempt $attempt/5 at $(date)"
+
+            keep_alive &
+            KEEP_ALIVE_PID="$!"
 
             if sync_once; then
-              echo "repo sync finished"
+              kill "$KEEP_ALIVE_PID" 2>/dev/null || true
+              wait "$KEEP_ALIVE_PID" 2>/dev/null || true
+
+              echo "repo sync finished successfully at $(date)"
+              echo "::endgroup::"
               exit 0
             fi
 
+            kill "$KEEP_ALIVE_PID" 2>/dev/null || true
+            wait "$KEEP_ALIVE_PID" 2>/dev/null || true
+
+            echo "repo sync attempt $attempt failed at $(date)"
+            echo "::endgroup::"
+
             wait_seconds=$((attempt * 900))
-            echo "repo sync failed. Waiting ${wait_seconds}s before retry..."
+            echo "Waiting ${wait_seconds}s before retry..."
             sleep "$wait_seconds"
           done
 
