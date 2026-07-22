@@ -15,7 +15,7 @@
     <project path="vendor/motorola/fogorow" 
              name="fuckyoumotorola/proprietary_vendor_motorola_fogorow" 
              remote="github" 
-             revision="lineage-21.0" />
+             revision="main" />
 
     <!-- ======================================================= -->
     <!-- KERNEL (Núcleo)                                         -->
@@ -24,7 +24,7 @@
     <project path="kernel/motorola/mt6768" 
              name="fuckyoumotorola/android_kernel_motorola_mt6768" 
              remote="github" 
-             revision="lineage-21.0" />
+             revision="main" />
 
     <!-- ======================================================= -->
     <!-- KERNEL (Opción B: Precompilado)                         -->
